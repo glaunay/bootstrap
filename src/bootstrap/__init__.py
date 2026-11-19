@@ -18,7 +18,7 @@ from rich.panel import Panel
 from .tool_loader import ToolLoader
 
 
-COMMANDS = ["/quit", "/exit", "/reset", "/help"]
+COMMANDS = ["/quit", "/exit", "/reset", "/help", "/context", "/context-add", "/context-clear"]
 console = Console()
 
 
@@ -100,12 +100,19 @@ def main(model, t) -> None:
     client = OpenAI(base_url="https://albert.api.etalab.gouv.fr/v1", api_key=API_KEY)
     tool_loader = ToolLoader(Path(__file__).parent / "tools")
 
-    system = {"role": "system",
-        "content": "Tu es un assistant scientifique. Utilise tes outils quand tu as besoin d'informations vérifiées, "
-                    "et cite les articles (titre, année, PMID) sur lesquels tu t'appuies. Réponds en français."
-                    "Source all ur reponses inlcuding url to actual reference"
-    }
-    messages = [system]
+    # --- Prompt système = base fixe + ajouts de l'utilisateur (/context-add) ---
+    base_system = ("Tu es un assistant scientifique. Utilise tes outils quand tu as besoin d'informations vérifiées, "
+                    "et cite les articles (titre, année, PMID) sur lesquels tu t'appuies. Réponds en français. "
+                    "Source all ur reponses inlcuding url to actual reference")
+    extra_context: list[str] = []
+
+    def build_system() -> str:
+        if not extra_context:
+            return base_system
+        ajouts = "\n".join(f"- {c}" for c in extra_context)
+        return f"{base_system}\n\nContexte supplémentaire fourni par l'utilisateur :\n{ajouts}"
+
+    messages = [{"role": "system", "content": build_system()}]
 
     # --- REPL : l'historique vit dans `messages` tant que le programme tourne ---
     session = PromptSession(
@@ -129,13 +136,41 @@ def main(model, t) -> None:
         if q in ("/quit", "/exit"):
             print("Au revoir.")
             break
-        if q == "/reset":
-            messages = [system]
+        cmd, _, arg = q.partition(" ")
+        arg = arg.strip()
+
+        if cmd == "/reset":            # efface l'historique, garde le contexte ajouté
+            messages = [{"role": "system", "content": build_system()}]
             console.print("[dim]Historique effacé.[/dim]")
             continue
-        if q == "/help":
-            print("/reset  efface l'historique\n/quit   quitte")
+        if cmd == "/help":
+            print("/context            affiche le prompt système\n"
+                  "/context-add <txt>  ajoute du contexte au prompt système\n"
+                  "/context-clear      revient au prompt système par défaut\n"
+                  "/reset              efface l'historique\n"
+                  "/quit               quitte")
             continue
+        if cmd == "/context":
+            console.print(Panel(escape(messages[0]["content"]), title="system", border_style="magenta"))
+            continue
+        if cmd == "/context-add":
+            if not arg:
+                console.print("[yellow]Usage : /context-add <texte>[/yellow]")
+                continue
+            extra_context.append(arg)
+            messages[0]["content"] = build_system()
+            console.print(f"[dim]Contexte ajouté ({len(extra_context)} élément(s)).[/dim]")
+            continue
+        if cmd == "/context-clear":
+            extra_context.clear()
+            messages[0]["content"] = build_system()
+            console.print("[dim]Contexte réinitialisé.[/dim]")
+            continue
+        if cmd.startswith("/"):
+            console.print(f"[yellow]Commande inconnue : {escape(cmd)} (voir /help)[/yellow]")
+            continue
+
+
 
         messages.append({"role": "user", "content": q})
         try:
@@ -151,7 +186,6 @@ def main(model, t) -> None:
 def trim_unanswered(messages):
     """Retire la dernière question et les échanges d'outils qui n'ont pas abouti à une réponse."""
     for i in range(len(messages) - 1, -1, -1):
-        console.print(f"[orange]Erreur : {messages}[/orange]")
         if messages[i]["role"] == "user":
             return messages[:i]
     return messages
