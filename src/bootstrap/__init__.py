@@ -1,10 +1,12 @@
 import json
 import os
 import sys
+from datetime import datetime
 import rich_click as click
 from pathlib import Path
 
 from dotenv import load_dotenv
+import openai
 from openai import OpenAI
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -14,12 +16,33 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
+from rich.table import Table
 
 from .tool_loader import ToolLoader
 
 
-COMMANDS = ["/quit", "/exit", "/reset", "/help", "/context", "/context-add", "/context-clear"]
+COMMANDS = ["/quit", "/exit", "/reset", "/help", "/context", "/context-add", "/context-clear", "/errors"]
 console = Console()
+
+# Journal des erreurs : quel service (API Albert ou outil) a échoué, quand, et pourquoi.
+error_log: list[dict] = []
+
+
+class ServiceError(Exception):
+    """Erreur levée par un service externe, étiquetée avec le nom de ce service."""
+    def __init__(self, service, cause):
+        super().__init__(f"{service} : {type(cause).__name__} : {cause}")
+        self.service = service
+        self.cause = cause
+
+
+def log_error(service, err):
+    error_log.append({
+        "heure": datetime.now().strftime("%H:%M:%S"),
+        "service": service,
+        "type": type(err).__name__,
+        "message": str(err),
+    })
 
 
 def conversation(client, model, t, tool_loader, messages):
@@ -27,14 +50,19 @@ def conversation(client, model, t, tool_loader, messages):
     # On limite le nombre de tours, au cas où le modèle tournerait en rond
     for tour in range(5):
         # 1. On interroge le LLM, en lui donnant la liste des outils
-        with console.status("Réflexion…"):   # spinner pendant l'appel à l'API
-            reponse = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=tool_loader.get_info(),
-                tool_choice="auto",   # le modèle décide lui-même s'il a besoin d'un outil
-                temperature=t,
-            )
+        try:
+            with console.status("Réflexion…"):   # spinner pendant l'appel à l'API
+                reponse = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tool_loader.get_info(),
+                    tool_choice="auto",   # le modèle décide lui-même s'il a besoin d'un outil
+                    temperature=t,
+                )
+        except openai.APIError as e:   # connexion, timeout, statut HTTP… côté API Albert
+            service = f"Albert API ({client.base_url})"
+            log_error(service, e)
+            raise ServiceError(service, e) from e
         message = reponse.choices[0].message
         # 2. Est-ce que le modèle demande un outil ?
         # Non : il a sa réponse finale, on l'affiche, on la garde dans l'historique et on sort.
@@ -73,7 +101,14 @@ def conversation(client, model, t, tool_loader, messages):
             else:
                 arguments = json.loads(appel.function.arguments)   # les arguments arrivent sous forme de texte JSON
                 console.print(f"[dim]⚙ {escape(nom)}({escape(str(arguments))})[/dim]", highlight=False)
-                resultat = fonction(**arguments)
+                try:
+                    resultat = fonction(**arguments)
+                except Exception as e:
+                    # L'outil a planté (souvent une erreur réseau) : on le journalise et on
+                    # renvoie l'erreur au modèle au lieu de faire tomber toute la question.
+                    log_error(f"outil {nom}", e)
+                    console.print(f"[red]✗ {escape(nom)} : {escape(type(e).__name__)}[/red]")
+                    resultat = f"Erreur : l'outil '{nom}' a échoué ({type(e).__name__} : {e})"
 
             trace.append({"tour": tour, "outil": nom, "arguments": appel.function.arguments,
                           "taille_resultat": len(str(resultat))})
@@ -148,6 +183,7 @@ def main(model, t) -> None:
                   "/context-add <txt>  ajoute du contexte au prompt système\n"
                   "/context-clear      revient au prompt système par défaut\n"
                   "/reset              efface l'historique\n"
+                  "/errors             affiche les services ayant provoqué une erreur\n"
                   "/quit               quitte")
             continue
         if cmd == "/context":
@@ -166,6 +202,17 @@ def main(model, t) -> None:
             messages[0]["content"] = build_system()
             console.print("[dim]Contexte réinitialisé.[/dim]")
             continue
+        if cmd == "/errors":
+            if not error_log:
+                console.print("[dim]Aucune erreur enregistrée.[/dim]")
+                continue
+            table = Table(title="Erreurs de connexion / services")
+            for col in ("heure", "service", "type", "message"):
+                table.add_column(col)
+            for e in error_log:
+                table.add_row(*(escape(e[c]) for c in ("heure", "service", "type", "message")))
+            console.print(table)
+            continue
         if cmd.startswith("/"):
             console.print(f"[yellow]Commande inconnue : {escape(cmd)} (voir /help)[/yellow]")
             continue
@@ -178,7 +225,11 @@ def main(model, t) -> None:
         except KeyboardInterrupt:      # Ctrl-C pendant la réponse : on abandonne cette question
             console.print("\n[yellow]Interrompu.[/yellow]")
             messages = trim_unanswered(messages)
-        except Exception as e:         # une erreur d'API ne doit pas tuer la session
+        except ServiceError as e:      # erreur déjà journalisée, on affiche le service fautif
+            console.print(f"[red]Erreur ({escape(e.service)}) : {escape(str(e.cause))}[/red]")
+            messages = trim_unanswered(messages)
+        except Exception as e:         # une erreur inattendue ne doit pas tuer la session
+            log_error("inconnu", e)
             console.print(f"[red]Erreur : {escape(str(e))}[/red]")
             messages = trim_unanswered(messages)
 
