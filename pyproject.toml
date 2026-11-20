@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 tlc = "bootstrap:main"
 psq = "bootstrap.tools.psicquic:test"
+uni = "bootstrap.tools.uniprot_api:test"
 [build-system]
 requires = ["uv_build>=0.9.3,<0.10.0"]
 build-backend = "uv_build"
