@@ -396,11 +396,11 @@ wheels = [
 
 [[package]]
 name = "networkx"
-version = "2.8.8"
+version = "3.7"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/cd/16/c44e8550012735b8f21b3df7f39e8ba5a987fb764ac017ad5f3589735889/networkx-2.8.8.tar.gz", hash = "sha256:230d388117af870fce5647a3c52401fcf753e94720e6ea6b4197a5355648885e", size = 1960828, upload-time = "2022-11-01T20:31:52.02Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/76/3af777226b63a5e64a6b36b1ec5855c14e2b94a37096d4760e595fc43511/networkx-3.7.tar.gz", hash = "sha256:fd77a511bd90f39f3d016351345b52cf5319b813bdca01de3f755d3cca62e96a", size = 1866482, upload-time = "2026-09-21T16:45:16.974Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/31/d2f89f1ae42718f8c8a9e440ebe38d7d5fe1e0d9eb9178ce779e365b3ab0/networkx-2.8.8-py3-none-any.whl", hash = "sha256:e435dfa75b1d7195c7b8378c3859f0445cd88c6b0375c181ed66823a9ceb7524", size = 2025192, upload-time = "2022-11-01T20:31:49.035Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/cd/fe58041e9011f307c490e3e17dd48cc516448f7c698a3f2d9d9d65d7e6a8/networkx-3.7-py3-none-any.whl", hash = "sha256:e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0", size = 2142205, upload-time = "2026-09-21T16:45:14.609Z" },
 ]
 
 [[package]]
@@ -640,16 +640,16 @@ wheels = [
 
 [[package]]
 name = "pypsicquic"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "networkx" },
     { name = "requests" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/ca/3374e024cdb810184bfc2dcfcf3e910cd5149cf6fe7370cf8cdf5c8c53e3/pypsicquic-0.2.0.tar.gz", hash = "sha256:e2a2c498a191ce06824929e7b46c2f9fafd9106767e3758d3729769928457906", size = 3611, upload-time = "2024-06-27T15:25:36.74Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/36/58895b6f7d99c09b524b596cb52a312185424c52d147377daf4d70c85050/pypsicquic-0.3.0.tar.gz", hash = "sha256:ac1abab9f2907373b6b439a89afa7e7384c5254c052fa11a02a1f3052c41cc19", size = 3547, upload-time = "2026-11-20T08:27:23.548Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/e6/b2e8a515068374c128fa74db572d4955845d4a884867ffb93e52bc9d2b6d/pypsicquic-0.2.0-py3-none-any.whl", hash = "sha256:5b25f16a44dc9137b972735a2b69b1bf023db83f34dd4654bfd83ef16867c599", size = 4009, upload-time = "2024-06-27T15:25:35.137Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/81/23cd197b642eab60463ea1b7de2c6d28a982b94bb798a2054d0defea5780/pypsicquic-0.3.0-py3-none-any.whl", hash = "sha256:b0877bea3a1b32eecdea2cb7f169730f83eeb7672198e949fffeda6c788b1d3f", size = 4489, upload-time = "2026-11-20T08:27:22.808Z" },
 ]
 
 [[package]]
