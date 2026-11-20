@@ -19,10 +19,41 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .tool_loader import ToolLoader
+from .tokens import calibrate, count_tokens, raw_count
 
 
-COMMANDS = ["/quit", "/exit", "/reset", "/help", "/context", "/context-add", "/context-clear", "/errors"]
+COMMANDS = ["/quit", "/exit", "/reset", "/help", "/context", "/context-add", "/context-clear", "/errors", "/tokens", "/reasoning", "/reasoning-last"]
 console = Console()
+
+# Comptage systématique des tokens à chaque appel au LLM (activé avec /tokens on).
+token_tracking = False
+
+# Affichage du raisonnement du modèle (activé avec /reasoning on).
+reasoning_display = False
+REASONING_MAX_CHARS = 1500
+# Raisonnement complet de la dernière question (un élément par tour), pour /reasoning-last.
+last_reasoning: list[str] = []
+
+
+def get_reasoning(message):
+    """Texte du raisonnement renvoyé par le serveur, ou None.
+
+    Albert (vLLM) le place dans `reasoning` ; d'anciennes versions utilisent `reasoning_content`.
+    Le SDK openai garde ces champs non standard dans `model_extra`.
+    """
+    extra = getattr(message, "model_extra", None) or {}
+    for champ in ("reasoning", "reasoning_content"):
+        texte = extra.get(champ) or getattr(message, champ, None)
+        if texte:
+            return texte
+    return None
+
+
+def show_reasoning(texte, tour):
+    if len(texte) > REASONING_MAX_CHARS:
+        texte = texte[:REASONING_MAX_CHARS] + " […] (texte complet : /reasoning-last)"
+    console.print(Panel(escape(texte), title=f"[dim]Raisonnement (tour {tour + 1})[/dim]",
+                        border_style="dim", style="dim"))
 
 # Journal des erreurs : quel service (API Albert ou outil) a échoué, quand, et pourquoi.
 error_log: list[dict] = []
@@ -30,40 +61,62 @@ error_log: list[dict] = []
 
 class ServiceError(Exception):
     """Erreur levée par un service externe, étiquetée avec le nom de ce service."""
-    def __init__(self, service, cause):
+    def __init__(self, service, cause, tokens=""):
         super().__init__(f"{service} : {type(cause).__name__} : {cause}")
         self.service = service
         self.cause = cause
+        self.tokens = tokens
 
 
-def log_error(service, err):
+def log_error(service, err, tokens=""):
     error_log.append({
         "heure": datetime.now().strftime("%H:%M:%S"),
         "service": service,
         "type": type(err).__name__,
         "message": str(err),
+        "tokens": tokens,
     })
 
 
 def conversation(client, model, t, tool_loader, messages):
     trace = []   # outils appelés pour cette question
+    last_reasoning.clear()
     # On limite le nombre de tours, au cas où le modèle tournerait en rond
     for tour in range(5):
         # 1. On interroge le LLM, en lui donnant la liste des outils
+        tools = tool_loader.get_info()
+        if token_tracking:
+            estimation_brute, _ = raw_count(messages, tools, model)   # pour la calibration
+            n, methode = count_tokens(messages, tools, model)
         try:
             with console.status("Réflexion…"):   # spinner pendant l'appel à l'API
                 reponse = client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    tools=tool_loader.get_info(),
+                    tools=tools,
                     tool_choice="auto",   # le modèle décide lui-même s'il a besoin d'un outil
                     temperature=t,
                 )
         except openai.APIError as e:   # connexion, timeout, statut HTTP… côté API Albert
             service = f"Albert API ({client.base_url})"
-            log_error(service, e)
-            raise ServiceError(service, e) from e
+            n, methode = count_tokens(messages, tools, model)
+            tokens = f"~{n} tokens ({methode}), {len(messages)} messages"
+            log_error(service, e, tokens)
+            raise ServiceError(service, e, tokens) from e
+        if token_tracking:
+            exact = reponse.usage.prompt_tokens if reponse.usage else None
+            console.print(f"[dim]◷ tokens : ~{n} estimés ({escape(methode)}), "
+                          f"{exact if exact is not None else '?'} exacts, {len(messages)} messages[/dim]")
+            if exact:   # nombre exact côté serveur : on corrige nos estimations suivantes
+                calibrate(model, estimation_brute, exact)
         message = reponse.choices[0].message
+        # Le raisonnement est seulement affiché : il n'est jamais remis dans `messages`
+        # (ça gonflerait le contexte, et gpt-oss n'attend pas son ancien raisonnement en entrée).
+        raisonnement = get_reasoning(message)
+        if raisonnement:
+            last_reasoning.append(raisonnement)
+            if reasoning_display:
+                show_reasoning(raisonnement, tour)
         # 2. Est-ce que le modèle demande un outil ?
         # Non : il a sa réponse finale, on l'affiche, on la garde dans l'historique et on sort.
         if not message.tool_calls:
@@ -184,6 +237,9 @@ def main(model, t) -> None:
                   "/context-clear      revient au prompt système par défaut\n"
                   "/reset              efface l'historique\n"
                   "/errors             affiche les services ayant provoqué une erreur\n"
+                  "/tokens [on|off]    compte les tokens à chaque appel (sans argument : bascule)\n"
+                  "/reasoning [on|off] affiche le raisonnement du modèle (sans argument : bascule)\n"
+                  "/reasoning-last     raisonnement complet de la dernière question\n"
                   "/quit               quitte")
             continue
         if cmd == "/context":
@@ -202,15 +258,39 @@ def main(model, t) -> None:
             messages[0]["content"] = build_system()
             console.print("[dim]Contexte réinitialisé.[/dim]")
             continue
+        if cmd == "/tokens":
+            global token_tracking
+            if arg not in ("", "on", "off"):
+                console.print("[yellow]Usage : /tokens [on|off][/yellow]")
+                continue
+            token_tracking = (not token_tracking) if not arg else (arg == "on")
+            console.print(f"[dim]Comptage des tokens : {'activé' if token_tracking else 'désactivé'}.[/dim]")
+            continue
+        if cmd == "/reasoning":
+            global reasoning_display
+            if arg not in ("", "on", "off"):
+                console.print("[yellow]Usage : /reasoning [on|off][/yellow]")
+                continue
+            reasoning_display = (not reasoning_display) if not arg else (arg == "on")
+            console.print(f"[dim]Affichage du raisonnement : {'activé' if reasoning_display else 'désactivé'}.[/dim]")
+            continue
+        if cmd == "/reasoning-last":
+            if not last_reasoning:
+                console.print("[dim]Aucun raisonnement pour la dernière question.[/dim]")
+                continue
+            for i, texte in enumerate(last_reasoning):
+                console.print(Panel(escape(texte), title=f"Raisonnement (tour {i + 1})", border_style="dim"))
+            continue
         if cmd == "/errors":
             if not error_log:
                 console.print("[dim]Aucune erreur enregistrée.[/dim]")
                 continue
             table = Table(title="Erreurs de connexion / services")
-            for col in ("heure", "service", "type", "message"):
+            cols = ("heure", "service", "type", "message", "tokens")
+            for col in cols:
                 table.add_column(col)
             for e in error_log:
-                table.add_row(*(escape(e[c]) for c in ("heure", "service", "type", "message")))
+                table.add_row(*(escape(e[c]) for c in cols))
             console.print(table)
             continue
         if cmd.startswith("/"):
@@ -227,6 +307,8 @@ def main(model, t) -> None:
             messages = trim_unanswered(messages)
         except ServiceError as e:      # erreur déjà journalisée, on affiche le service fautif
             console.print(f"[red]Erreur ({escape(e.service)}) : {escape(str(e.cause))}[/red]")
+            if e.tokens:
+                console.print(f"[dim]Contexte : {escape(e.tokens)}[/dim]")
             messages = trim_unanswered(messages)
         except Exception as e:         # une erreur inattendue ne doit pas tuer la session
             log_error("inconnu", e)
