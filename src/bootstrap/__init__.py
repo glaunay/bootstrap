@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import sys
 from datetime import datetime
@@ -61,21 +62,44 @@ error_log: list[dict] = []
 
 class ServiceError(Exception):
     """Erreur levée par un service externe, étiquetée avec le nom de ce service."""
-    def __init__(self, service, cause, tokens=""):
+    def __init__(self, service, cause, tokens="", hint=""):
         super().__init__(f"{service} : {type(cause).__name__} : {cause}")
         self.service = service
         self.cause = cause
         self.tokens = tokens
+        self.hint = hint   # conseil affiché à l'utilisateur (quoi faire ensuite)
 
 
-def log_error(service, err, tokens=""):
+def log_error(service, err, tokens="", kind=None):
+    """`kind` précise la nature de l'erreur quand le type d'exception ne suffit pas."""
+    nom = type(err).__name__
     error_log.append({
         "heure": datetime.now().strftime("%H:%M:%S"),
         "service": service,
-        "type": type(err).__name__,
+        "type": f"{kind} ({nom})" if kind else nom,
         "message": str(err),
         "tokens": tokens,
     })
+
+
+# Messages typiques renvoyés par vLLM / Albert quand le contexte dépasse la limite du modèle.
+_CONTEXT_TOO_LARGE = re.compile(
+    r"maximum context length|context length|context window|too many tokens|prompt is too long"
+    r"|input .*too long|reduce the length", re.IGNORECASE)
+
+
+def is_context_too_large(err):
+    """413, ou 400 dont le message parle de longueur de contexte."""
+    if not isinstance(err, openai.APIStatusError):
+        return False
+    if err.status_code == 413:
+        return True
+    return err.status_code == 400 and bool(_CONTEXT_TOO_LARGE.search(str(err)))
+
+
+def context_size(messages, tools, model):
+    n, methode = count_tokens(messages, tools, model)
+    return f"~{n} tokens ({methode}), {len(messages)} messages"
 
 
 def conversation(client, model, t, tool_loader, messages):
@@ -97,10 +121,23 @@ def conversation(client, model, t, tool_loader, messages):
                     tool_choice="auto",   # le modèle décide lui-même s'il a besoin d'un outil
                     temperature=t,
                 )
-        except openai.APIError as e:   # connexion, timeout, statut HTTP… côté API Albert
+        except openai.RateLimitError as e:   # 429 : trop de requêtes / quota Albert atteint
+            # Le client openai a déjà réessayé (max_retries) avant d'abandonner.
             service = f"Albert API ({client.base_url})"
-            n, methode = count_tokens(messages, tools, model)
-            tokens = f"~{n} tokens ({methode}), {len(messages)} messages"
+            tokens = context_size(messages, tools, model)
+            retry_after = e.response.headers.get("retry-after")
+            attente = f"réessayez dans {retry_after} s" if retry_after else "réessayez dans un moment"
+            log_error(service, e, tokens, kind="TropDeRequêtes")
+            raise ServiceError(service, e, tokens,
+                               hint=f"Limite de requêtes Albert atteinte : {attente}.") from e
+        except openai.APIError as e:   # connexion, timeout, autre statut HTTP… côté API Albert
+            service = f"Albert API ({client.base_url})"
+            tokens = context_size(messages, tools, model)
+            if is_context_too_large(e):
+                log_error(service, e, tokens, kind="ContexteTropLong")
+                raise ServiceError(service, e, tokens,
+                                   hint="Contexte trop long pour le modèle : /reset pour vider "
+                                        "l'historique, ou posez une question plus ciblée.") from e
             log_error(service, e, tokens)
             raise ServiceError(service, e, tokens) from e
         if token_tracking:
@@ -309,6 +346,8 @@ def main(model, t) -> None:
             console.print(f"[red]Erreur ({escape(e.service)}) : {escape(str(e.cause))}[/red]")
             if e.tokens:
                 console.print(f"[dim]Contexte : {escape(e.tokens)}[/dim]")
+            if e.hint:
+                console.print(f"[yellow]{escape(e.hint)}[/yellow]")
             messages = trim_unanswered(messages)
         except Exception as e:         # une erreur inattendue ne doit pas tuer la session
             log_error("inconnu", e)
