@@ -29,7 +29,7 @@ def run(uniprot_id):
     res = set()
     for _ in resp:
         res.update([ x.replace('uniprotkb:', '')  for x in _.interactors if x.startswith('uniprotkb:') ] )
-    return res - {uniprot_id}
+    return f"{uniprot_id} interactors: { ', '.join(list(res - {uniprot_id})) }"
 
 @click.command()
 @click.argument("uniprot_id")
@@ -41,4 +41,4 @@ def test(uniprot_id):
         res.update([ x.replace('uniprotkb:', '')  for x in _.interactors if x.startswith('uniprotkb:') ] )
         #print(_.interactors)
     #print (res - {uniprot_id})
-    return res - {uniprot_id}
+    print( f"{uniprot_id} interactors: { ', '.join(list(res - {uniprot_id})) }" )

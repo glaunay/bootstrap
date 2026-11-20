@@ -213,7 +213,7 @@ def conversation(client, model, t, tool_loader, messages):
 
 @click.command()
 @click.option("--model", default="gpt-oss-120b", help="LLM model")
-@click.option("--t", help="temperature ", default=0.2)
+@click.option("--t", help="temperature ", default=0.0)
 def main(model, t) -> None:
 
     # --- Initialisation du client Albert ---
