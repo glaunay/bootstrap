@@ -11,14 +11,14 @@ META_INF = {
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Motif glob du nom de fichier, ex: '*.csv'. Défaut : '*' (tous).",
+                        "description": "Motif glob du nom de fichier.",
                     },
                     "path": {
                         "type": "string",
                         "description": "Dossier racine de la recherche. Défaut : working directory.",
                     },
                 },
-                "required": [],
+                "required": ["pattern"],
             },
         },
     }
@@ -30,7 +30,7 @@ import os
 from fnmatch import fnmatch
 from pathlib import Path
 
-def run(pattern="*", path="."):
+def run(pattern, path="."):
     root = Path(path).expanduser()
     if not root.is_dir():
         return f"Erreur : '{path}' n'est pas un dossier."
